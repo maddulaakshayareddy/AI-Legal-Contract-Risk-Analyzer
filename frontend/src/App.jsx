@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 
-const API_URL = "http://127.0.0.1:8000";
+const API_URL = (
+  import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
+).replace(/\/$/, "");
 
 const SUPPORTED_LANGUAGES = [
   "Assamese", "Bengali", "Bodo", "Dogri", "Gujarati", "Hindi",
@@ -338,41 +344,118 @@ function App() {
     setLanguageSpeaking(false);
   };
 
+ 
   const startLanguageVoiceInput = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
     if (!SpeechRecognition) {
-      setTranslationMessage("Voice input is not supported in this browser. You can type the text instead.");
+      setTranslationMessage(
+        "Voice input is not supported in this browser. You can type the text instead."
+      );
       return;
     }
+
     if (languageVoiceListening) {
       stopLanguageVoiceInput();
       return;
     }
+
     stopLanguageSpeech();
+
     const recognition = new SpeechRecognition();
     recognition.lang = getSpeechLanguageCode(sourceLanguage);
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
-    recognition.onstart = () => setLanguageVoiceListening(true);
-    recognition.onend = () => {
-      languageVoiceRecognitionRef.current = null;
-      setLanguageVoiceListening(false);
+
+    let processedResults = 0;
+
+    recognition.onstart = () => {
+      setLanguageVoiceListening(true);
+      setTranslationMessage("");
     };
-    recognition.onerror = (event) => {
-      languageVoiceRecognitionRef.current = null;
-      setLanguageVoiceListening(false);
-      if (event?.error !== "aborted") setTranslationMessage("Voice input could not be captured. Please try again or type the text.");
-    };
+
     recognition.onresult = (event) => {
-      const transcript = event.results?.[0]?.[0]?.transcript || "";
-      if (transcript.trim()) {
-        setLanguageText((previous) => previous ? `${previous} ${transcript.trim()}` : transcript.trim());
-        setLanguageFileName("");
+      const newParts = [];
+
+      for (
+        let i = processedResults;
+        i < event.results.length;
+        i += 1
+      ) {
+        const result = event.results[i];
+
+        if (result?.isFinal) {
+          const transcript = result[0]?.transcript?.trim();
+
+          if (transcript) {
+            newParts.push(transcript);
+          }
+
+          processedResults = i + 1;
+        }
+      }
+
+      const transcript = newParts.join(" ").trim();
+
+      if (!transcript) return;
+
+      setLanguageText((previous) => {
+        const current = previous.trim();
+
+        if (!current) return transcript;
+
+        if (
+          current === transcript ||
+          current.endsWith(` ${transcript}`)
+        ) {
+          return previous;
+        }
+
+        return `${current} ${transcript}`;
+      });
+
+      setLanguageFileName("");
+    };
+
+    recognition.onend = () => {
+      if (languageVoiceRecognitionRef.current === recognition) {
+        languageVoiceRecognitionRef.current = null;
+      }
+
+      setLanguageVoiceListening(false);
+    };
+
+    recognition.onerror = (event) => {
+      if (languageVoiceRecognitionRef.current === recognition) {
+        languageVoiceRecognitionRef.current = null;
+      }
+
+      setLanguageVoiceListening(false);
+
+      if (event?.error !== "aborted") {
+        setTranslationMessage(
+          "Voice input could not be captured. Please try again or type the text."
+        );
       }
     };
+
     languageVoiceRecognitionRef.current = recognition;
-    recognition.start();
+
+    try {
+      recognition.start();
+    } catch {
+      if (languageVoiceRecognitionRef.current === recognition) {
+        languageVoiceRecognitionRef.current = null;
+      }
+
+      setLanguageVoiceListening(false);
+      setTranslationMessage(
+        "Voice input could not be started. Please try again."
+      );
+    }
   };
+
 
   const speakTranslatedText = () => {
     if (!translatedText || !window.speechSynthesis) {
@@ -626,42 +709,122 @@ function App() {
     window.speechSynthesis.speak(utterance);
   };
 
+  
   const startDocumentVoiceInput = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
     if (!SpeechRecognition) {
-      setDocumentGeneratorMessage("Voice input is not supported in this browser. You can type the requirements instead.");
+      setDocumentGeneratorMessage(
+        "Voice input is not supported in this browser. You can type the requirements instead."
+      );
       return;
     }
+
     if (documentVoiceListening) {
       stopDocumentVoiceInput();
       return;
     }
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
+
+    if (window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+
     setDocumentSpeaking(false);
+
     const recognition = new SpeechRecognition();
     recognition.lang = getSpeechLanguageCode(documentVoiceLanguage);
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
-    recognition.onstart = () => setDocumentVoiceListening(true);
-    recognition.onend = () => {
-      documentVoiceRecognitionRef.current = null;
-      setDocumentVoiceListening(false);
+
+    let processedResults = 0;
+
+    recognition.onstart = () => {
+      setDocumentVoiceListening(true);
+      setDocumentGeneratorMessage("");
     };
-    recognition.onerror = (event) => {
-      documentVoiceRecognitionRef.current = null;
-      setDocumentVoiceListening(false);
-      if (event?.error !== "aborted") setDocumentGeneratorMessage("Voice input could not be captured. Please try again or type the requirements.");
-    };
+
     recognition.onresult = (event) => {
-      const transcript = event.results?.[0]?.[0]?.transcript || "";
-      if (transcript.trim()) {
-        setDocumentDetails((previous) => previous ? `${previous} ${transcript.trim()}` : transcript.trim());
-        setDocumentReferenceFileName("");
+      const newParts = [];
+
+      for (
+        let i = processedResults;
+        i < event.results.length;
+        i += 1
+      ) {
+        const result = event.results[i];
+
+        if (result?.isFinal) {
+          const transcript = result[0]?.transcript?.trim();
+
+          if (transcript) {
+            newParts.push(transcript);
+          }
+
+          processedResults = i + 1;
+        }
+      }
+
+      const transcript = newParts.join(" ").trim();
+
+      if (!transcript) return;
+
+      setDocumentDetails((previous) => {
+        const current = previous.trim();
+
+        if (!current) return transcript;
+
+        if (
+          current === transcript ||
+          current.endsWith(` ${transcript}`)
+        ) {
+          return previous;
+        }
+
+        return `${current} ${transcript}`;
+      });
+
+      setDocumentReferenceFileName("");
+    };
+
+    recognition.onend = () => {
+      if (documentVoiceRecognitionRef.current === recognition) {
+        documentVoiceRecognitionRef.current = null;
+      }
+
+      setDocumentVoiceListening(false);
+    };
+
+    recognition.onerror = (event) => {
+      if (documentVoiceRecognitionRef.current === recognition) {
+        documentVoiceRecognitionRef.current = null;
+      }
+
+      setDocumentVoiceListening(false);
+
+      if (event?.error !== "aborted") {
+        setDocumentGeneratorMessage(
+          "Voice input could not be captured. Please try again or type the requirements."
+        );
       }
     };
+
     documentVoiceRecognitionRef.current = recognition;
-    recognition.start();
+
+    try {
+      recognition.start();
+    } catch {
+      if (documentVoiceRecognitionRef.current === recognition) {
+        documentVoiceRecognitionRef.current = null;
+      }
+
+      setDocumentVoiceListening(false);
+      setDocumentGeneratorMessage(
+        "Voice input could not be started. Please try again."
+      );
+    }
   };
+
 
   const uploadDocumentReferenceFile = async (e) => {
     const file = e.target.files?.[0];
@@ -963,6 +1126,236 @@ function App() {
       setClauseComparisonMessage(error.message);
     } finally {
       setClauseComparing(false);
+    }
+  };
+   
+  
+  const downloadClauseComparison = () => {
+    if (!clauseComparison || !clauseComparison.trim()) {
+      setClauseComparisonMessage("Please compare the clauses first.");
+      return;
+    }
+
+    try {
+      const pdf = new jsPDF({
+        orientation: "landscape",
+        unit: "mm",
+        format: "a4",
+      });
+
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const margin = 12;
+      const usableWidth = pageWidth - margin * 2;
+      let y = 20;
+
+      const addPageIfNeeded = (height) => {
+        if (y + height > pageHeight - margin) {
+          pdf.addPage();
+          y = 18;
+        }
+      };
+
+      // Report title
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(18);
+      pdf.text("Clause Comparison Report", margin, y);
+      y += 10;
+
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(9);
+      pdf.text(
+        `Generated on ${new Date().toLocaleDateString()}`,
+        margin,
+        y
+      );
+      y += 9;
+
+      const lines = clauseComparison
+        .replace(/\r\n/g, "\n")
+        .split("\n");
+
+      const isTableRow = (line) => {
+        const trimmed = line.trim();
+        return trimmed.startsWith("|") && trimmed.endsWith("|");
+      };
+
+      const parseTableRow = (line) =>
+        line
+          .trim()
+          .replace(/^\|/, "")
+          .replace(/\|$/, "")
+          .split("|")
+          .map((cell) =>
+            cell
+              .trim()
+              .replace(/\*\*(.*?)\*\*/g, "$1")
+              .replace(/\*(.*?)\*/g, "$1")
+              .replace(/`([^`]+)`/g, "$1")
+          );
+
+      const isSeparatorRow = (row) =>
+        row.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s/g, "")));
+
+      let i = 0;
+
+      while (i < lines.length) {
+        const line = lines[i].trim();
+
+        if (!line) {
+          y += 2;
+          i += 1;
+          continue;
+        }
+
+        // Convert Markdown tables into real PDF tables.
+        if (isTableRow(line)) {
+          const tableRows = [];
+
+          while (i < lines.length && isTableRow(lines[i])) {
+            const row = parseTableRow(lines[i]);
+
+            if (!isSeparatorRow(row)) {
+              tableRows.push(row);
+            }
+
+            i += 1;
+          }
+
+          if (tableRows.length > 0) {
+            const header = tableRows[0];
+            const body = tableRows.slice(1);
+            const columnCount = Math.max(
+              1,
+              ...tableRows.map((row) => row.length)
+            );
+
+            autoTable(pdf, {
+              head: [header],
+              body: body.map((row) =>
+                Array.from(
+                  { length: columnCount },
+                  (_, index) => row[index] || ""
+                )
+              ),
+              startY: y,
+              margin: {
+                left: margin,
+                right: margin,
+                top: 15,
+                bottom: margin,
+              },
+              tableWidth: usableWidth,
+              theme: "grid",
+              showHead: "everyPage",
+              styles: {
+                font: "helvetica",
+                fontSize: columnCount >= 4 ? 7 : 8,
+                cellPadding: 2.5,
+                overflow: "linebreak",
+                valign: "top",
+                lineWidth: 0.15,
+              },
+              headStyles: {
+                fontStyle: "bold",
+                fontSize: columnCount >= 4 ? 7 : 8,
+                valign: "middle",
+              },
+              rowPageBreak: "auto",
+            });
+
+            y = pdf.lastAutoTable.finalY + 7;
+          }
+
+          continue;
+        }
+
+        // Format Markdown headings.
+        const headingMatch = line.match(/^(#{1,6})\s+(.+)$/);
+
+        if (headingMatch) {
+          const heading = headingMatch[2]
+            .replace(/\*\*(.*?)\*\*/g, "$1")
+            .replace(/\*(.*?)\*/g, "$1");
+
+          y += 2;
+          addPageIfNeeded(10);
+
+          pdf.setFont("helvetica", "bold");
+          pdf.setFontSize(headingMatch[1].length <= 2 ? 13 : 11);
+
+          const headingLines = pdf.splitTextToSize(
+            heading,
+            usableWidth
+          );
+
+          pdf.text(headingLines, margin, y);
+          y += headingLines.length * 6 + 3;
+
+          pdf.setFont("helvetica", "normal");
+          pdf.setFontSize(9);
+          i += 1;
+          continue;
+        }
+
+        // Clean Markdown formatting from normal paragraphs.
+        const text = line
+          .replace(/^\s*[-*+]\s+/, "- ")
+          .replace(/^\s*\d+\.\s+/, (match) => match)
+          .replace(/^>\s?/, "")
+          .replace(/\*\*(.*?)\*\*/g, "$1")
+          .replace(/\*(.*?)\*/g, "$1")
+          .replace(/__(.*?)__/g, "$1")
+          .replace(/_(.*?)_/g, "$1")
+          .replace(/`([^`]+)`/g, "$1");
+
+        pdf.setFont("helvetica", "normal");
+        pdf.setFontSize(9);
+
+        const wrappedLines = pdf.splitTextToSize(text, usableWidth);
+        const lineHeight = 4.5;
+        let offset = 0;
+
+        while (offset < wrappedLines.length) {
+          const availableLines = Math.max(
+            1,
+            Math.floor((pageHeight - margin - y) / lineHeight)
+          );
+
+          if (availableLines < 1) {
+            pdf.addPage();
+            y = 18;
+            continue;
+          }
+
+          const pageLines = wrappedLines.slice(
+            offset,
+            offset + availableLines
+          );
+
+          pdf.text(pageLines, margin, y);
+          y += pageLines.length * lineHeight + 2;
+          offset += pageLines.length;
+
+          if (offset < wrappedLines.length) {
+            pdf.addPage();
+            y = 18;
+          }
+        }
+
+        i += 1;
+      }
+
+      pdf.save("clause_comparison.pdf");
+
+      setClauseComparisonMessage(
+        "Clause comparison PDF downloaded successfully."
+      );
+    } catch (error) {
+      console.error("Clause comparison PDF error:", error);
+      setClauseComparisonMessage(
+        "Could not generate the PDF. Please try again."
+      );
     }
   };
 
@@ -2399,6 +2792,7 @@ function App() {
                 clauseComparing={clauseComparing}
                 clauseComparisonMessage={clauseComparisonMessage}
                 compareClauses={compareClauses}
+                downloadClauseComparison={downloadClauseComparison}
                 uploadClauseFile={uploadClauseFile}
                 clauseAFileLoading={clauseAFileLoading}
                 clauseAFileName={clauseAFileName}
@@ -3274,7 +3668,11 @@ function AnalysisPage({
                     {speakingAnswer ? "⏹ Stop" : "🔊 Listen"}
                   </button>
                 </div>
-                <p>{qaAnswer.answer_text}</p>
+                <div className="qa-markdown-answer">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {qaAnswer.answer_text || ""}
+                  </ReactMarkdown>
+                </div>
               </div>
             )}
           </section>
@@ -3544,6 +3942,7 @@ function ClauseComparisonPage({
   clauseComparing,
   clauseComparisonMessage,
   compareClauses,
+  downloadClauseComparison,
   uploadClauseFile,
   clauseAFileLoading,
   clauseAFileName,
@@ -3557,18 +3956,25 @@ function ClauseComparisonPage({
       <section className="section-intro">
         <div>
           <h1>Clause Comparison</h1>
-          <p>Compare two contract clauses and understand the important changes in simple language.</p>
+          <p>
+            Compare two contract clauses and understand the important
+            changes in simple language.
+          </p>
         </div>
       </section>
 
       <section className="dashboard-grid two-col">
         <div className="panel">
           <div className="section-icon purple">A</div>
+
           <div className="language-source-head">
             <div>
               <h3>Clause A</h3>
-              <p className="muted">Upload a document or paste the first clause.</p>
+              <p className="muted">
+                Upload a document or paste the first clause.
+              </p>
             </div>
+
             <label className="upload-document-btn">
               <input
                 type="file"
@@ -3578,31 +3984,51 @@ function ClauseComparisonPage({
               {clauseAFileLoading ? "Reading..." : "Upload file"}
             </label>
           </div>
+
           {clauseAFileName && (
             <div className="language-file-chip">
               <span>📄 {clauseAFileName}</span>
-              <button type="button" onClick={() => { setClauseA(""); setClauseAFileName(""); }}>Clear</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setClauseA("");
+                  setClauseAFileName("");
+                }}
+              >
+                Clear
+              </button>
             </div>
           )}
+
           <textarea
             rows="14"
             value={clauseA}
             onChange={(e) => {
               setClauseA(e.target.value);
-              if (e.target.value !== clauseA) setClauseAFileName("");
+              if (e.target.value !== clauseA) {
+                setClauseAFileName("");
+              }
             }}
             placeholder="Upload a PDF/Word/TXT file, or paste Clause A here..."
           />
-          <p className="language-file-help">After uploading, review and edit the extracted text so only the clause you want to compare remains.</p>
+
+          <p className="language-file-help">
+            After uploading, review and edit the extracted text so only
+            the clause you want to compare remains.
+          </p>
         </div>
 
         <div className="panel">
           <div className="section-icon blue">B</div>
+
           <div className="language-source-head">
             <div>
               <h3>Clause B</h3>
-              <p className="muted">Upload a document or paste the second clause.</p>
+              <p className="muted">
+                Upload a document or paste the second clause.
+              </p>
             </div>
+
             <label className="upload-document-btn">
               <input
                 type="file"
@@ -3612,22 +4038,38 @@ function ClauseComparisonPage({
               {clauseBFileLoading ? "Reading..." : "Upload file"}
             </label>
           </div>
+
           {clauseBFileName && (
             <div className="language-file-chip">
               <span>📄 {clauseBFileName}</span>
-              <button type="button" onClick={() => { setClauseB(""); setClauseBFileName(""); }}>Clear</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setClauseB("");
+                  setClauseBFileName("");
+                }}
+              >
+                Clear
+              </button>
             </div>
           )}
+
           <textarea
             rows="14"
             value={clauseB}
             onChange={(e) => {
               setClauseB(e.target.value);
-              if (e.target.value !== clauseB) setClauseBFileName("");
+              if (e.target.value !== clauseB) {
+                setClauseBFileName("");
+              }
             }}
             placeholder="Upload a PDF/Word/TXT file, or paste Clause B here..."
           />
-          <p className="language-file-help">After uploading, review and edit the extracted text so only the clause you want to compare remains.</p>
+
+          <p className="language-file-help">
+            After uploading, review and edit the extracted text so only
+            the clause you want to compare remains.
+          </p>
         </div>
       </section>
 
@@ -3639,13 +4081,20 @@ function ClauseComparisonPage({
             onClick={compareClauses}
             disabled={clauseComparing}
           >
-            {clauseComparing ? "Comparing clauses..." : "Compare Clauses"}
+            {clauseComparing
+              ? "Comparing clauses..."
+              : "Compare Clauses"}
           </button>
         </div>
 
         {clauseComparisonMessage && (
           <div
-            className={`alert ${clauseComparisonMessage.toLowerCase().includes("success") ? "success" : "danger"}`}
+            className={`alert ${
+              clauseComparisonMessage.toLowerCase().includes("success") ||
+              clauseComparisonMessage.toLowerCase().includes("downloaded")
+                ? "success"
+                : "danger"
+            }`}
           >
             {clauseComparisonMessage}
           </div>
@@ -3656,29 +4105,54 @@ function ClauseComparisonPage({
         <div className="panel-head">
           <div>
             <h3>Comparison Result</h3>
-            <p>Important differences and review points from the two clauses.</p>
+            <p>
+              Important differences and review points from the two clauses.
+            </p>
           </div>
+
+          {clauseComparison && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={downloadClauseComparison}
+            >
+              Download Comparison
+            </button>
+          )}
         </div>
 
         {clauseComparison ? (
-          <pre className="generated-document">{clauseComparison}</pre>
+          <div className="generated-document comparison-markdown">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {clauseComparison
+                .replace(/\\\\([*_`|])/g, "$1")
+                .replace(/\\\\+/g, "")
+                .replace(/&lt;br\s*\/?&gt;|\\?<br\s*\/?&gt;/gi, "\n")}
+            </ReactMarkdown>
+          </div>
         ) : (
           <div className="generator-empty">
             <div className="empty-icon">⇄</div>
             <h3>No comparison yet</h3>
-            <p>Paste two clauses above and compare them to see the result here.</p>
+            <p>
+              Paste two clauses above and compare them to see the result here.
+            </p>
           </div>
         )}
       </section>
 
       <div className="generator-note">
-        <strong>Comparison is based only on the text you provide.</strong>
-        <span>Review important wording and decisions independently before using the result in a real legal situation.</span>
+        <strong>
+          Comparison is based only on the text you provide.
+        </strong>
+        <span>
+          Review important wording and decisions independently before
+          using the result in a real legal situation.
+        </span>
       </div>
     </div>
   );
 }
-
 
 function VersionDiffPage({
   versionA,
@@ -4452,7 +4926,11 @@ function QaPage({ contracts, qaContractId, setQaContractId, question, setQuestio
           <div className="panel-head"><div><h3>Answer</h3><p>Response based on the selected document</p></div><span className="pill purple-pill">AI answer</span></div>
           {!qaAnswer ? <EmptyState text="Your answer will appear here after you ask a question." /> : (
             <>
-              <div className="answer-box"><div className="answer-toolbar"><strong>AI answer</strong><button className="voice-btn small" type="button" onClick={() => speakText(qaAnswer.answer_text)}>{speakingAnswer ? "⏹ Stop" : "🔊 Listen"}</button></div><p>{qaAnswer.answer_text}</p></div>
+              <div className="answer-box"><div className="answer-toolbar"><strong>AI answer</strong><button className="voice-btn small" type="button" onClick={() => speakText(qaAnswer.answer_text)}>{speakingAnswer ? "⏹ Stop" : "🔊 Listen"}</button></div><div className="qa-markdown-answer">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {qaAnswer.answer_text || ""}
+                  </ReactMarkdown>
+                </div></div>
             </>
           )}
         </div>
@@ -4730,6 +5208,56 @@ const styles = `
 .document-generator-grid{align-items:stretch}.document-generator-grid select{width:100%;padding:12px 14px;border:1px solid var(--border);border-radius:12px;background:#fff;color:var(--text);outline:none}.document-generator-grid select:focus,.document-generator-grid textarea:focus{border-color:var(--indigo);box-shadow:0 0 0 3px rgba(91,92,240,.08)}.document-output-panel{min-height:620px}.generated-document{margin:0;min-height:520px;max-height:680px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:13px;line-height:1.65;color:#1f2937;background:#f8f9fd;border:1px solid var(--border);border-radius:14px;padding:20px}.generator-empty{min-height:520px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:var(--muted);padding:30px}.generator-empty h3{color:var(--text);margin:12px 0 6px}.generator-note{margin-top:16px;padding:14px 16px;border:1px solid var(--border);background:var(--soft);border-radius:12px;display:flex;flex-direction:column;gap:4px}.generator-note span{color:var(--muted);font-size:13px}
 .evidence-list{display:grid;gap:14px;margin-top:14px}.evidence-card{border:1px solid var(--border);background:#f8fafc;border-radius:18px;padding:18px}.evidence-meta{display:block;margin-top:5px;color:#64748b;font-size:12px}.evidence-source-box{margin-top:14px;background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:14px}.evidence-source-box span,.evidence-context-box span{display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:#6366f1;margin-bottom:7px}.evidence-source-box blockquote,.evidence-context-box blockquote{margin:0;color:#334155;line-height:1.65;white-space:pre-wrap}.evidence-meta-row{display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap;margin-top:10px;font-size:12px;color:#64748b}.evidence-meta-row.warning{color:#b45309}.compact-actions{margin-top:0}
 .activity-list{display:flex;flex-direction:column;gap:0;border:1px solid var(--border);border-radius:14px;overflow:hidden;background:#fff}.activity-row{display:grid;grid-template-columns:36px minmax(0,1fr) auto;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border);background:#fff}.activity-row:last-child{border-bottom:0}.activity-row:hover{background:#fafbff}.activity-icon{width:34px;height:34px;border-radius:10px;background:#eef0ff;color:var(--indigo);display:flex;align-items:center;justify-content:center;font-weight:900}.activity-main{min-width:0}.activity-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.activity-top strong{color:var(--navy);font-size:12px}.activity-main p{margin:4px 0 2px;color:#475569;font-size:11px}.activity-main small{display:block;color:#94a3b8;font-size:9px;word-break:break-all}.activity-row time{white-space:nowrap;color:#64748b;font-size:10px}.activity-status{display:inline-flex;align-items:center;justify-content:center;min-width:34px;padding:4px 7px;border-radius:999px;font-size:9px;font-weight:800}.activity-status.ok{background:#ecfdf5;color:#047857}.activity-status.problem{background:#fff1f2;color:#be123c}@media (max-width:700px){.activity-row{grid-template-columns:32px minmax(0,1fr)}.activity-row time{grid-column:2}.activity-row{padding:12px}}
+
+/* Readability and layout refinements: safe CSS-only overrides */
+:root{--ui-body-size:14px}
+body{font-size:var(--ui-body-size);line-height:1.55}
+.content-wrap{padding:30px clamp(18px,2.4vw,34px)}
+.page-stack{gap:24px}
+.panel{padding:24px}
+.panel h3{font-size:18px;line-height:1.35}
+.panel-head p,.section-intro p{font-size:13px;line-height:1.6}
+.topbar h2{font-size:20px}
+.topbar p{font-size:13px;line-height:1.45}
+.hero-banner{padding:clamp(26px,3vw,38px)}
+.hero-banner h1{font-size:clamp(28px,2.4vw,36px);line-height:1.18}
+.hero-banner p{font-size:15px;line-height:1.75}
+.metric-top{font-size:13px;line-height:1.45}
+.metric-card{padding:20px}
+.metric-card strong{font-size:30px}
+.metric-card small{font-size:12px;line-height:1.5}
+.row-main strong{font-size:14px}
+.row-main small,.muted-small{font-size:12px;line-height:1.45}
+.mini-btn,.text-btn,.link-btn,.primary-btn,.secondary-btn,.ghost-btn{font-size:13px;min-height:38px}
+.nav-item{font-size:14px;padding:12px}
+.workspace-label{font-size:11px}
+.long-text{font-size:15px;line-height:1.85;color:#334155;max-width:100ch}
+.category-card p,.insight-card p,.recommendation-card p,.clause-section p{font-size:13px;line-height:1.75}
+.category-card small{font-size:12px}
+.clause-section blockquote{font-size:14px;line-height:1.8;padding:14px 16px}
+.revision-box p{font-size:14px;line-height:1.75}
+.recommendation-card{padding:18px}
+.recommendation-card strong{font-size:14px;line-height:1.5}
+.risk-pill{font-size:11px;padding:5px 9px}
+.risk-score-card strong{font-size:34px}
+.answer-box{font-size:14px;line-height:1.85;padding:20px}
+.qa-markdown-answer{font-size:14px;line-height:1.8;overflow-wrap:anywhere}
+.qa-markdown-answer h1,.qa-markdown-answer h2,.qa-markdown-answer h3{line-height:1.4;margin:1em 0 .5em;color:var(--navy)}
+.qa-markdown-answer p{font-size:14px;line-height:1.8;margin:.65em 0}
+.qa-markdown-answer ul,.qa-markdown-answer ol{padding-left:1.5rem;line-height:1.8}
+.qa-markdown-answer table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse}
+.qa-markdown-answer th,.qa-markdown-answer td{padding:9px 12px;border:1px solid var(--border);text-align:left;vertical-align:top}
+.qa-markdown-answer th{background:#f3f5fb;color:var(--navy)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid rgba(91,92,240,.28);outline-offset:2px}
+button:disabled{cursor:not-allowed;opacity:.65}
+.empty-state{font-size:14px;line-height:1.65}
+.help-item strong{font-size:14px}
+.help-item p{font-size:13px;line-height:1.65}
+.generated-document{font-size:14px;line-height:1.8}
+.evidence-source-box blockquote,.evidence-context-box blockquote{font-size:14px;line-height:1.8}
+@media(max-width:820px){.content-wrap{padding:18px}.panel{padding:20px}.hero-banner p{font-size:14px}.topbar h2{font-size:18px}}
+@media(max-width:560px){.content-wrap{padding:14px}.page-stack{gap:16px}.panel{padding:16px;border-radius:14px}.metric-card{padding:16px}.hero-banner{padding:22px;border-radius:16px}.hero-banner h1{font-size:27px}.hero-banner p{font-size:14px}.long-text,.answer-box,.qa-markdown-answer,.qa-markdown-answer p{font-size:14px}.panel-head{align-items:flex-start;gap:10px}.panel-head p{font-size:12px}.risk-score-card strong{font-size:30px}}
+
 
 `;
 

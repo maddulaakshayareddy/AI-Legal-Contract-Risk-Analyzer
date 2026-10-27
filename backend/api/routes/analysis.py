@@ -1,3 +1,4 @@
+
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,9 +10,11 @@ from models.clause import Clause
 from models.contract import Contract
 from models.recommendation import Recommendation
 from models.user import User
+
 from services.analysis_service import run_contract_analysis
 from services.auth_service import get_current_user
 from services.authorization_service import get_owned_contract
+from services.document_parser import verify_clause_evidence
 
 
 router = APIRouter(
@@ -84,7 +87,7 @@ def analyze_contract_endpoint(
         raise HTTPException(
             status_code=502,
             detail=f"Contract analysis failed: {str(exc)}"
-        )
+        ) from exc
 
 
 # ---------------------------------------------------------
@@ -216,7 +219,7 @@ def get_contract_analysis(
             category_risks = []
 
     # -----------------------------------------------------
-    # FLAGGED CLAUSES
+    # FLAGGED CLAUSES + EVIDENCE VERIFICATION
     # -----------------------------------------------------
     clauses = (
         db.query(Clause)
@@ -229,6 +232,14 @@ def get_contract_analysis(
     flagged_clauses = []
 
     for clause in clauses:
+
+        evidence = verify_clause_evidence(
+            original_snippet=clause.original_snippet or "",
+            contract_text=contract.raw_text or "",
+            file_path=contract.file_path,
+            file_type=contract.file_type,
+        )
+
         flagged_clauses.append(
             {
                 "id": clause.id,
@@ -242,6 +253,15 @@ def get_contract_analysis(
                 "severity": clause.severity,
                 "suggested_revision": (
                     clause.suggested_revision
+                ),
+                "evidence_verified": (
+                    evidence["evidence_verified"]
+                ),
+                "page_number": (
+                    evidence["page_number"]
+                ),
+                "evidence_status": (
+                    evidence["evidence_status"]
                 )
             }
         )

@@ -1,3 +1,6 @@
+# Keep local environment secrets out of Git
+/backend/.env
+/frontend/.env
 # Logs
 logs
 *.log

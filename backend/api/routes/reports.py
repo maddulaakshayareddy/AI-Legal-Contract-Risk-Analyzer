@@ -1,12 +1,16 @@
+
 from pathlib import Path
 from datetime import datetime
+from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.units import inch
+from reportlab.lib import colors
 from reportlab.platypus import (
     SimpleDocTemplate,
     Paragraph,
@@ -14,21 +18,23 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
-from reportlab.lib import colors
+
 from sqlalchemy.orm import Session
 
 from database.connection import get_db
 from models.user import User
 from models.analysis import Analysis
 from models.clause import Clause
+from models.contract import Contract
 from models.recommendation import Recommendation
+
 from services.auth_service import get_current_user
 from services.authorization_service import get_owned_contract
 
 
 router = APIRouter(
     prefix="/api/reports",
-    tags=["Reports"]
+    tags=["Reports"],
 )
 
 
@@ -37,9 +43,40 @@ REPORTS_DIR.mkdir(exist_ok=True)
 
 
 # ---------------------------------------------------------
+# PDF TEXT CLEANING
+# ---------------------------------------------------------
+def clean_pdf_text(value):
+    """
+    Normalize problematic Unicode punctuation and escape dynamic
+    text before inserting it into a ReportLab Paragraph.
+    """
+
+    if value is None:
+        return ""
+
+    text = str(value)
+
+    replacements = {
+        "\u25a0": "-",   # Black square
+        "\u2010": "-",   # Hyphen
+        "\u2011": "-",   # Non-breaking hyphen
+        "\u2012": "-",   # Figure dash
+        "\u2013": "-",   # En dash
+        "\u2014": "-",   # Em dash
+        "\u2212": "-",   # Minus sign
+        "\u00a0": " ",   # Non-breaking space
+        "\u202f": " ",   # Narrow no-break space
+    }
+
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+
+    return escape(text)
+
+
+# ---------------------------------------------------------
 # MARKDOWN REPORT
 # ---------------------------------------------------------
-
 @router.get("/{contract_id}/markdown")
 def download_markdown_report(
     contract_id: int,
@@ -54,9 +91,7 @@ def download_markdown_report(
 
     analysis = (
         db.query(Analysis)
-        .filter(
-            Analysis.contract_id == contract_id
-        )
+        .filter(Analysis.contract_id == contract_id)
         .order_by(Analysis.id.desc())
         .first()
     )
@@ -69,17 +104,13 @@ def download_markdown_report(
 
     clauses = (
         db.query(Clause)
-        .filter(
-            Clause.analysis_id == analysis.id
-        )
+        .filter(Clause.analysis_id == analysis.id)
         .all()
     )
 
     recommendations = (
         db.query(Recommendation)
-        .filter(
-            Recommendation.analysis_id == analysis.id
-        )
+        .filter(Recommendation.analysis_id == analysis.id)
         .all()
     )
 
@@ -89,9 +120,7 @@ def download_markdown_report(
     lines.append("")
     lines.append(f"## Contract: {contract.title}")
     lines.append("")
-    lines.append(
-        f"**Contract ID:** {contract.id}"
-    )
+    lines.append(f"**Contract ID:** {contract.id}")
     lines.append("")
     lines.append(
         f"**Risk Score:** {analysis.overall_risk_score}/100"
@@ -118,20 +147,25 @@ def download_markdown_report(
                 f"### Clause {index}: {clause.category}"
             )
             lines.append("")
+
             lines.append(
                 f"**Severity:** {clause.severity}"
             )
             lines.append("")
+
             lines.append(
-                f"**Original:** {clause.original_snippet}"
+                f"**Original:** {clause.original_snippet or ''}"
             )
             lines.append("")
+
             lines.append(
-                f"**Issue:** {clause.issue_summary}"
+                f"**Issue:** {clause.issue_summary or ''}"
             )
             lines.append("")
+
             lines.append(
-                f"**Suggested Revision:** {clause.suggested_revision}"
+                f"**Suggested Revision:** "
+                f"{clause.suggested_revision or ''}"
             )
             lines.append("")
     else:
@@ -144,16 +178,16 @@ def download_markdown_report(
     if recommendations:
         for index, item in enumerate(
             recommendations,
-            start=1
+            start=1,
         ):
             lines.append(
-                f"{index}. **{item.title}**"
+                f"{index}. **{item.title or 'Recommendation'}**"
             )
             lines.append(
-                f"   {item.description}"
+                f"   {item.description or ''}"
             )
             lines.append(
-                f"   Importance: {item.importance}"
+                f"   Importance: {item.importance or 'Not specified'}"
             )
             lines.append("")
     else:
@@ -181,7 +215,6 @@ def download_markdown_report(
 # ---------------------------------------------------------
 # PDF REPORT
 # ---------------------------------------------------------
-
 @router.get("/{contract_id}/pdf")
 def download_pdf_report(
     contract_id: int,
@@ -196,9 +229,7 @@ def download_pdf_report(
 
     analysis = (
         db.query(Analysis)
-        .filter(
-            Analysis.contract_id == contract_id
-        )
+        .filter(Analysis.contract_id == contract_id)
         .order_by(Analysis.id.desc())
         .first()
     )
@@ -211,17 +242,13 @@ def download_pdf_report(
 
     clauses = (
         db.query(Clause)
-        .filter(
-            Clause.analysis_id == analysis.id
-        )
+        .filter(Clause.analysis_id == analysis.id)
         .all()
     )
 
     recommendations = (
         db.query(Recommendation)
-        .filter(
-            Recommendation.analysis_id == analysis.id
-        )
+        .filter(Recommendation.analysis_id == analysis.id)
         .all()
     )
 
@@ -229,6 +256,9 @@ def download_pdf_report(
         f"contract_{contract_id}_report.pdf"
     )
 
+    # -----------------------------------------------------
+    # PDF STYLES
+    # -----------------------------------------------------
     styles = getSampleStyleSheet()
 
     title_style = ParagraphStyle(
@@ -269,11 +299,14 @@ def download_pdf_report(
         leftMargin=45,
         topMargin=45,
         bottomMargin=45,
+        title="AI Legal Contract Risk Analysis",
     )
 
     story = []
 
-    # Title
+    # -----------------------------------------------------
+    # TITLE AND CONTRACT DETAILS
+    # -----------------------------------------------------
     story.append(
         Paragraph(
             "AI Legal Contract Risk Analysis",
@@ -283,7 +316,7 @@ def download_pdf_report(
 
     story.append(
         Paragraph(
-            f"Contract: {contract.title}",
+            f"Contract: {clean_pdf_text(contract.title)}",
             body_style,
         )
     )
@@ -297,14 +330,19 @@ def download_pdf_report(
 
     story.append(
         Paragraph(
-            f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "Generated: "
+            + clean_pdf_text(
+                datetime.now().strftime("%Y-%m-%d %H:%M")
+            ),
             small_style,
         )
     )
 
     story.append(Spacer(1, 15))
 
-    # Risk summary table
+    # -----------------------------------------------------
+    # RISK SUMMARY TABLE
+    # -----------------------------------------------------
     risk_data = [
         [
             Paragraph("<b>Risk Score</b>", body_style),
@@ -312,7 +350,7 @@ def download_pdf_report(
         ],
         [
             f"{analysis.overall_risk_score}/100",
-            analysis.overall_risk_level,
+            clean_pdf_text(analysis.overall_risk_level),
         ],
     ]
 
@@ -356,38 +394,35 @@ def download_pdf_report(
     story.append(risk_table)
     story.append(Spacer(1, 15))
 
-    # Summary
+    # -----------------------------------------------------
+    # SUMMARY
+    # -----------------------------------------------------
     story.append(
-        Paragraph(
-            "Summary",
-            heading_style,
-        )
+        Paragraph("Summary", heading_style)
     )
 
     story.append(
         Paragraph(
-            analysis.summary or "No summary available.",
+            clean_pdf_text(
+                analysis.summary or "No summary available."
+            ),
             body_style,
         )
     )
 
-    # Flagged clauses
+    # -----------------------------------------------------
+    # FLAGGED CLAUSES
+    # -----------------------------------------------------
     story.append(
-        Paragraph(
-            "Flagged Clauses",
-            heading_style,
-        )
+        Paragraph("Flagged Clauses", heading_style)
     )
 
     if clauses:
-        for index, clause in enumerate(
-            clauses,
-            start=1
-        ):
+        for index, clause in enumerate(clauses, start=1):
             story.append(
                 Paragraph(
                     f"<b>Clause {index}: "
-                    f"{clause.category}</b>",
+                    f"{clean_pdf_text(clause.category or 'General')}</b>",
                     body_style,
                 )
             )
@@ -395,7 +430,7 @@ def download_pdf_report(
             story.append(
                 Paragraph(
                     f"<b>Severity:</b> "
-                    f"{clause.severity}",
+                    f"{clean_pdf_text(clause.severity or 'Not specified')}",
                     body_style,
                 )
             )
@@ -403,7 +438,7 @@ def download_pdf_report(
             story.append(
                 Paragraph(
                     f"<b>Original Clause:</b> "
-                    f"{clause.original_snippet}",
+                    f"{clean_pdf_text(clause.original_snippet)}",
                     body_style,
                 )
             )
@@ -411,7 +446,7 @@ def download_pdf_report(
             story.append(
                 Paragraph(
                     f"<b>Issue:</b> "
-                    f"{clause.issue_summary}",
+                    f"{clean_pdf_text(clause.issue_summary)}",
                     body_style,
                 )
             )
@@ -419,7 +454,7 @@ def download_pdf_report(
             story.append(
                 Paragraph(
                     f"<b>Suggested Revision:</b> "
-                    f"{clause.suggested_revision}",
+                    f"{clean_pdf_text(clause.suggested_revision)}",
                     body_style,
                 )
             )
@@ -433,29 +468,29 @@ def download_pdf_report(
             )
         )
 
-    # Recommendations
+    # -----------------------------------------------------
+    # RECOMMENDATIONS
+    # -----------------------------------------------------
     story.append(
-        Paragraph(
-            "Recommendations",
-            heading_style,
-        )
+        Paragraph("Recommendations", heading_style)
     )
 
     if recommendations:
         for index, item in enumerate(
             recommendations,
-            start=1
+            start=1,
         ):
             story.append(
                 Paragraph(
-                    f"<b>{index}. {item.title}</b>",
+                    f"<b>{index}. "
+                    f"{clean_pdf_text(item.title or 'Recommendation')}</b>",
                     body_style,
                 )
             )
 
             story.append(
                 Paragraph(
-                    item.description,
+                    clean_pdf_text(item.description),
                     body_style,
                 )
             )
@@ -463,7 +498,7 @@ def download_pdf_report(
             story.append(
                 Paragraph(
                     f"<b>Importance:</b> "
-                    f"{item.importance}",
+                    f"{clean_pdf_text(item.importance or 'Not specified')}",
                     small_style,
                 )
             )
@@ -477,6 +512,9 @@ def download_pdf_report(
             )
         )
 
+    # -----------------------------------------------------
+    # GENERATE PDF
+    # -----------------------------------------------------
     document.build(story)
 
     return FileResponse(
