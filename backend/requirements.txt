@@ -25,6 +25,7 @@ langchain-text-splitters
 numpy
 
 PyPDF2
+PyMuPDF
 python-docx
 
 reportlab
