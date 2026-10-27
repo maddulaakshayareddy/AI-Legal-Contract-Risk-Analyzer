@@ -1,3 +1,4 @@
+
 import os
 
 from dotenv import load_dotenv
@@ -10,6 +11,20 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "sqlite:///./legal_analyzer.db"
 )
+
+# Use the installed psycopg2 driver for PostgreSQL URLs.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgres://",
+        "postgresql+psycopg2://",
+        1
+    )
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgresql://",
+        "postgresql+psycopg2://",
+        1
+    )
 
 if DATABASE_URL.startswith("sqlite"):
     engine = create_engine(
