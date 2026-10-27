@@ -13,8 +13,11 @@ from groq import Groq
 from pydantic import BaseModel, Field
 from PyPDF2 import PdfReader
 from docx import Document
-import fitz
-import easyocr
+import pymupdf as fitz
+try:
+    import easyocr
+except ImportError:
+    easyocr = None
 import numpy as np
 from PIL import Image
 from reportlab.lib.pagesizes import A4
@@ -92,9 +95,14 @@ class TranslationRequest(BaseModel):
 
 _ocr_reader = None
 
-
 def get_ocr_reader():
     global _ocr_reader
+
+    if easyocr is None:
+        raise HTTPException(
+            status_code=503,
+            detail="OCR is unavailable because EasyOCR is not installed."
+        )
 
     if _ocr_reader is None:
         _ocr_reader = easyocr.Reader(
