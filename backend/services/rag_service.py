@@ -12,11 +12,11 @@ MODEL_NAME = "all-MiniLM-L6-v2"
 
 @lru_cache(maxsize=1)
 def get_embedding_model():
-    """
-    Load the embedding model only when it is first needed.
-    Reuse the same model for later requests.
-    """
-    return SentenceTransformer(MODEL_NAME)
+    """Load the embedding model once and reuse it."""
+    return SentenceTransformer(
+        MODEL_NAME,
+        device="cpu"
+    )
 
 
 def split_into_chunks(
@@ -53,10 +53,10 @@ def split_into_chunks(
 
 
 def create_embeddings(chunks: List[str]) -> np.ndarray:
-    """Convert text chunks into embedding vectors."""
+    """Convert text chunks into normalized embedding vectors."""
 
     if not chunks:
-        return np.array([], dtype="float32")
+        return np.empty((0, 0), dtype="float32")
 
     model = get_embedding_model()
 
@@ -64,23 +64,25 @@ def create_embeddings(chunks: List[str]) -> np.ndarray:
         chunks,
         convert_to_numpy=True,
         normalize_embeddings=True,
-        batch_size=8,
+        batch_size=1,
         show_progress_bar=False
     )
 
-    return embeddings.astype("float32")
+    return np.asarray(embeddings, dtype="float32")
 
 
 def build_faiss_index(chunks: List[str]):
-    """Create a FAISS similarity-search index."""
+    """Build a FAISS similarity-search index."""
 
     if not chunks:
         return None
 
     embeddings = create_embeddings(chunks)
-    dimension = embeddings.shape[1]
 
-    index = faiss.IndexFlatIP(dimension)
+    if embeddings.size == 0:
+        return None
+
+    index = faiss.IndexFlatIP(embeddings.shape[1])
     index.add(embeddings)
 
     return index
@@ -91,7 +93,7 @@ def retrieve_relevant_chunks(
     chunks: List[str],
     top_k: int = 5
 ) -> List[str]:
-    """Retrieve semantically relevant contract chunks."""
+    """Retrieve relevant contract chunks using semantic similarity."""
 
     if not query or not chunks:
         return []
@@ -107,6 +109,7 @@ def retrieve_relevant_chunks(
         [query],
         convert_to_numpy=True,
         normalize_embeddings=True,
+        batch_size=1,
         show_progress_bar=False
     ).astype("float32")
 
@@ -115,11 +118,9 @@ def retrieve_relevant_chunks(
 
     results = []
 
-    for score, index_position in zip(scores[0], indices[0]):
-        if index_position < 0:
-            continue
-
-        results.append(chunks[index_position])
+    for score, position in zip(scores[0], indices[0]):
+        if position >= 0:
+            results.append(chunks[position])
 
     return results
 
@@ -129,7 +130,7 @@ def build_rag_context(
     contract_text: str,
     top_k: int = 5
 ) -> str:
-    """Build context from relevant contract sections."""
+    """Build context from the most relevant contract sections."""
 
     chunks = split_into_chunks(contract_text)
 
@@ -142,11 +143,7 @@ def build_rag_context(
     if not relevant_chunks:
         return "No relevant contract sections were found."
 
-    context_parts = []
-
-    for number, chunk in enumerate(relevant_chunks, start=1):
-        context_parts.append(
-            f"[Relevant Contract Section {number}]\n{chunk}"
-        )
-
-    return "\n\n".join(context_parts)
+    return "\n\n".join(
+        f"[Relevant Contract Section {number}]\n{chunk}"
+        for number, chunk in enumerate(relevant_chunks, start=1)
+    )
