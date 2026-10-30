@@ -5,7 +5,8 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
 const API_URL = (
-  import.meta.env.VITE_API_URL || "http://127.0.0.1:8000"
+  import.meta.env.VITE_API_URL ||
+  "https://ai-legal-contract-backend.onrender.com"
 ).replace(/\/$/, "");
 
 const SUPPORTED_LANGUAGES = [
